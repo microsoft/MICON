@@ -1,0 +1,31 @@
+# @package _global_
+
+# Encoder args
+img_encoder:
+  from_pretrained: true
+  finetune: false
+  model_type: 'vit' # ['resnet', 'vit']
+  model:
+    # _target_: torchvision.models.resnet34
+    _target_: torchvision.models.vit_b_16
+    weights: 'DEFAULT'
+  output_size : 1000 # Final output size of the encoder
+  
+mol_encoder:
+  from_pretrained: false
+  depth: 3  # Number of message passing steps
+  atom_messages: false # Centers messages on atoms instead of on bonds.
+  use_input_features: false
+  atom_descriptors: None
+  atom_descriptors_path: None
+  bond_descriptors: None
+  bond_descriptors_path: None
+  is_atom_bond_targets: false
+  undirected: false # Undirected edges (always sum the two relevant bond vectors). 
+  aggregation: 'mean' # ['mean', 'sum', 'norm']
+  aggregation_norm: 100 # For norm aggregation, number by which to divide summed up atomic features
+  activation: 'ReLU'
+  dropout: 0.1 
+  bias: false # Whether to add bias to linear layers
+  output_size : 1000 # Final output size of the encoder
+

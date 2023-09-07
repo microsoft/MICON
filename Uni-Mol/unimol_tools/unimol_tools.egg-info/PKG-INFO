@@ -1,0 +1,18 @@
+Metadata-Version: 2.1
+Name: unimol-tools
+Version: 1.0.0
+Summary: unimol_tools is a Python package for property prediciton with Uni-Mol in molecule, materials and protein.
+Home-page: https://github.com/dptech-corp/Uni-Mol
+Author: DP Technology
+Author-email: unimol@dp.tech
+License: The MIT License
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Requires-Python: >=3.6

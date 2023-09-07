@@ -1,0 +1,67 @@
+defaults:
+  - _self_
+  - setup: encoders
+
+mode: 'train'
+
+# Experiemnt args
+device: 'cuda'
+eval_only: false
+predict_only: false
+seed: 42
+
+ROOT: "/home/t-yeminyu/code/MICON/datasets"
+# Dataset args
+data:
+  train_path: "${ROOT}/pos_control" # Absolute path to dataset
+  valid_path: "${ROOT}/pos_control" 
+  generate_path: "${ROOT}/pos_control" 
+  train_sample_strategy: 'random' # 'molecule', 'sequential', 'img_only'
+  valid_sample_strategy: 'molecule' 
+  generate_sample_strategy: 'img_only'
+  from_pretrained: True 
+
+# Optimizer args
+train:
+  optim:
+    lr: 1e-3
+    weight_decay: 1e-2
+    grad_clip: 1.0
+  top_k: [1, 3, 5]
+  batch_size: 512
+  epochs: -1
+  steps: 100000
+  log_every: 50
+  lr_scheduler: "ReduceLROnPlateau"
+  save: true
+  save_per_steps: 1000
+  save_dir: "ckpts"
+
+valid:
+  batch_size: 8
+  per_steps: 500
+  steps: 20
+
+ckpt: 6000
+load:
+  load_path: "/home/t-yeminyu/code/MICON/outputs/\
+              train/treated_moa/2023-09-03_07-30-33_supervised_freeze_img_freeze_mol_vit/ckpts/\
+              model_${ckpt}.pt"
+
+# Contrastive args
+micon:
+  loss: 'supervised' # Whether to add self-supervised contrastive learning loss
+  interleave_image: true # Interleave image channels to fit pre-trained resnet
+  generation_head: true # Whether to add generation head to the model
+  generation_double_align: true # Whether to use
+  hidden_size: 1000 # Dimensionality of output of encoders
+  projection_dim: 512 # Dimensionality of hidden layers in projectors.
+  dropout: 0.1
+  temperature: 1.0 # Temperature hyper-parameter for softmax fuction
+
+dataset: "pos_control"
+exp_setting: "freeze_img_freeze_mol_vit"
+
+hydra:
+  run:
+    dir: test_outputs/${mode}/${dataset}/${now:%Y-%m-%d_%H-%M-%S}_${micon.loss}_${exp_setting}

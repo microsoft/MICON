@@ -4,11 +4,13 @@ import pickle as pkl
 import random
 import h5py
 import sys
+import os
 import pickle as pkl
 from PIL import Image
 from subprocess import call
 from collections import Counter
 import tqdm
+import time 
 
 def to_hdf5(data, name):
     with h5py.File(name, "w") as f:
@@ -42,19 +44,20 @@ if __name__ == "__main__":
                    "JCP2022_046054", "JCP2022_035095", "JCP2022_064022", 
                    "JCP2022_050797", "JCP2022_012818"]
     
-    metadata = pd.read_csv("/home/t-yeminyu/code/MICON/datasets/metadata/local_image_paths.csv")
-    compound = pd.read_csv("/home/t-yeminyu/code/MICON/datasets/metadata/compound.csv")
-    plates = pd.read_csv("/home/t-yeminyu/code/MICON/datasets/metadata/plate.csv.gz")
+    metadata = pd.read_csv("/data/yemin/MICON-main/datasets/metadata/local_image_paths.csv")
+    compound = pd.read_csv("/data/yemin/MICON-main/datasets/metadata/compound.csv")
+    plates = pd.read_csv("/data/yemin/MICON-main/datasets/metadata/plate.csv.gz")
     
-    target2_plates = plates.loc[plates["Metadata_PlateType"] == "TARGET2"]
+    target2_plates = plates.loc[plates["Metadata_PlateType"] == "TARGET1"]
     target2_compound = metadata.merge(target2_plates, on=['Metadata_Source', 'Metadata_Batch', 'Metadata_Plate'])
     target2_compound_smi = target2_compound.merge(compound, on=['Metadata_JCP2022'])
     target2_compound_smi = target2_compound_smi.drop_duplicates()
     
-    jp_target = pd.read_csv("JUMP-Target-2_compound_metadata_with_cp0016_inchikey.csv")
+    jp_target = pd.read_csv("/data/yemin/MICON-main/datasets/JUMP-Target-2_compound_metadata_with_cp0016_inchikey.csv")
     inchikey2moa = dict(zip(jp_target['Metadata_InChIKey'], jp_target['target']))
     
-    non_control_target2 = target2_compound_smi.loc[(target2_compound_smi["Metadata_InChIKey"].isin(inchikey2moa.keys())) & (target2_compound_smi["Metadata_InChIKey"] != "IAZDPXIOMUYVGZ-UHFFFAOYSA-N")]
+    non_control_target2 = target2_compound_smi.loc[(target2_compound_smi["Metadata_InChIKey"].isin(inchikey2moa.keys()))] 
+                                                #    & (target2_compound_smi["Metadata_InChIKey"] != "IAZDPXIOMUYVGZ-UHFFFAOYSA-N")]
     
     non_control_target2["Metadata_Target"] = [inchikey2moa[x] for x in non_control_target2['Metadata_InChIKey'].tolist()]
     
@@ -68,26 +71,55 @@ if __name__ == "__main__":
     
     # metadata_compound_smi = pd.read_csv("/home/t-yeminyu/target2_test_meta.csv")
     metadata_compound_smi = non_control_target2
+    metadata_compound_smi.rename(columns={"FOV": "Metadata_Fov"}, inplace=True)
     smi_counter = Counter(metadata_compound_smi['Metadata_SMILES'].tolist())
     smi_list = sorted([(k,v) for k,v in smi_counter.items()], key=lambda x: x[1], reverse=True)
-    
     # skip pos and neg control
-    root = "/home/t-yeminyu/cell-painting-hot/"
+    root = "/data/yemin/cell_painting_hot/"
     meta_df = pd.DataFrame()
     
     # for i, (smi, _) in tqdm.tqdm(enumerate(smi_list)):
-    selected_plates = metadata_compound_smi['Metadata_Plate'].sample(20)
+    # selected_plates = metadata_compound_smi['Metadata_Plate'].sample(20)
+    processed_image = os.listdir("/data/yemin/MICON-main/datasets/target1/treated/") + os.listdir("/data/yemin/MICON-main/datasets/target1/control/")
+    print(f"Processing image {len(processed_image)}.")
+    selected_plates = []
+    for i in metadata_compound_smi['Metadata_Plate']:
+        if i not in selected_plates:
+            selected_plates.append(i)
+    print(len(selected_plates))
+    num_processed_image = 0
+    total_image = len(metadata_compound_smi)
+    start_time = time.time()
     for plate in selected_plates:
         _df = metadata_compound_smi.loc[metadata_compound_smi['Metadata_Plate'] == plate]
+        bad_index = []
         for i in tqdm.tqdm(range(len(_df))):
+            temp_df = _df.iloc[i]
+            num_processed_image += 1
+            treated_fname =  temp_df["Metadata_Source"] + "$" +temp_df["Metadata_Batch"] + "$" + temp_df["Metadata_Plate"] + "$" + temp_df["Metadata_Well"] + "$" + str(temp_df["Metadata_Fov"]) + ".h5"
+            print(f"Processing well {num_processed_image}/{total_image}, total time {time.time() - start_time}s, Avg time per well {(time.time() - start_time)/num_processed_image}s.")
+            if treated_fname in processed_image:
+                print(f"Already processed image")
+                continue
+            if temp_df["Metadata_InChIKey"] != "IAZDPXIOMUYVGZ-UHFFFAOYSA-N":
+                is_treated = True
+            else:
+                is_treated = False
             _treated = []
             for index in ["agp_path", "dna_path", "er_path", "mito_path", "rna_path"]:
-                 _treated.append(pil_load(root + _df.iloc[i][index]))
-            _treated = np.stack(_treated, axis=2)
-            treated_fname =  _df.iloc[i]["Metadata_Source"] + "$" + _df.iloc[i]["Metadata_Batch"] + "$" + _df.iloc[i]["Metadata_Plate"] + "$" + _df.iloc[i]["Metadata_Well"] + "$" + str(_df.iloc[i]["FOV"]) + ".h5"
-            to_hdf5(_treated, "/home/t-yeminyu/code/MICON/datasets/treated_moa_target2/treated/"+ treated_fname)
+                 _treated.append(pil_load(root + temp_df[index]))
+            if len(_treated) == 5:
+                _treated = np.stack(_treated, axis=2)
+                if is_treated:
+                    to_hdf5(_treated, "/data/yemin/MICON-main/datasets/target1/treated/"+ treated_fname)
+                else:
+                    to_hdf5(_treated, "/data/yemin/MICON-main/datasets/target1/control/"+ treated_fname)
+            else:
+                bad_index.append(i)
+                continue
+        _df.drop(_df.index[bad_index], inplace=True)
         meta_df = pd.concat((meta_df, _df), axis=0, ignore_index=True)
-        meta_df.to_csv("/home/t-yeminyu/code/MICON/datasets/treated_moa_target2/metadata_test.csv", index=False)
+        meta_df.to_csv("/data/yemin/MICON-main/datasets/target1/metadata.csv", index=False)
         #with open("/home/t-yeminyu/code/MICON/datasets/treated_xlarge/treated_file_path.pkl", "wb") as f:
             #pkl.dump(treated_file_path, f)
             

@@ -8,12 +8,14 @@ import pandas as pd
 import albumentations as A
 import pickle as pkl
 
+from tqdm import tqdm
 from argparse import Namespace
 from typing import Callable, List, Union
 from collections import defaultdict
 from functools import lru_cache
 
 from rdkit import Chem
+from rdkit.Chem import AllChem
 from torch.utils.data.dataset import Dataset
 from torchvision import transforms
 from unimol_tools import UniMolRepr
@@ -36,43 +38,10 @@ def to_hdf5(data: np.ndarray, name: str):
 
 def load_hdf5(name: str) -> np.ndarray:
     with h5py.File(name, "r") as f:
-        data = f["raw_image"][:]
+        data = f["raw_image"][:]/255.
     return data
 
-def get_all_data_v2(root: os.PathLike):
-    '''load treated and control files from root directory under "treated" and "control", and load smiles from well2smiles.csv.
-    If provided paired treated and control filename list, load them from treated_files and control_files.
-    '''
-    if os.path.exists(os.path.join(root, "treated_files.pkl")):
-        with open(os.path.join(root, "treated_files.pkl"), "rb") as f:
-            treated = pkl.load(f)
-        with open(os.path.join(root, "control_files.pkl"), "rb") as f:
-            control = pkl.load(f)
-    else:
-        treated = os.listdir(os.path.join(root, "treated"))
-        control = os.listdir(os.path.join(root, "control"))
-    smiles = []
-    mol_metadata = pd.read_csv(os.path.join(root, "well2smiles.csv"))
-    well2smiles = dict(zip(mol_metadata["Plate+Well"].tolist(), mol_metadata["SMILES"]))
-    for p in treated:
-        well = "_".join(p.split("_")[:-1])
-        try:
-            smiles.append(well2smiles[well])
-        except:
-            print("fail to read {}".format(p))
-
-    treated = [os.path.join(root, "treated", x) for x in treated]
-    control = [os.path.join(root, "control", x) for x in control]
-    if os.path.exists(os.path.join(root, "smi2label.pkl")):
-        smi2label = pkl.load(open(os.path.join(root, "smi2label.pkl"), "rb"))
-    else:
-        # Class 0 is control label
-        smi2label = {s:i+1 for i,s in enumerate(list(set(smiles)))}
-        pkl.dump(smi2label, open(os.path.join(root, "smi2label.pkl"), "wb"))
-    name2smi = dict(zip(treated, smiles))
-    return treated, control, smiles, name2smi, smi2label
-
-def get_all_data_v3(root: os.PathLike, metadata_fname: os.PathLike):
+def get_all_data(root: os.PathLike, metadata_fname: os.PathLike):
     
     def get_file_name(metadata, type):
         source = metadata["Metadata_Source"].astype(str).values.tolist()
@@ -100,6 +69,7 @@ def get_all_data_v3(root: os.PathLike, metadata_fname: os.PathLike):
     
     # Class 0 is reserved for control label
     mol2label = {s:i+1 for i,s in enumerate(sorted(list(set(treated_molecules))))}
+    mol2label[CONTROL] = 0
     
     return img_treated, img_control, treated_molecules, mol2img, img2mol, mol2label
     
@@ -124,9 +94,27 @@ class MoleculeImageDataset(Dataset):
         else:
             raise ValueError("mode must be either train or test")
         
-        self.img_treated, self.img_control, self.molecules, self.mol2img, self.img2mol, self.mol2label = get_all_data_v3(root, metadata_fname)
+        self.img_treated, self.img_control, self.molecules, self.mol2img, self.img2mol, self.mol2label = get_all_data(root, metadata_fname)
         self.unique_smiles = list(self.mol2img.keys())
         
+        # Unimol representation.
+        if self.args.mol_encoder.model == "Unimol":
+            if not os.path.exists(root + "/unimol_repr.pkl"):    
+                self.unique_smiles_dict = dict(zip(self.unique_smiles, \
+                                                            from_pretrained.get_repr(self.unique_smiles)['cls_repr']))
+                with open(root + "/unimol_repr.pkl", "wb") as f:
+                    pkl.dump(self.unique_smiles_dict, f)
+            else:
+                with open(root + "/unimol_repr.pkl", "rb") as f:
+                    self.unique_smiles_dict = pkl.load(f)
+                for m in self.unique_smiles:
+                    if m not in self.unique_smiles_dict:
+                        self.unique_smiles_dict[m] = from_pretrained.get_repr(m)['cls_repr'][0]
+        elif self.args.mol_encoder.model == "MLP":
+            self.unique_smiles_dict = dict()
+            for m in self.unique_smiles:
+                self.unique_smiles_dict[m] = np.array(AllChem.GetMorganFingerprintAsBitVect(Chem.MolFromSmiles(m), radius=2, nBits=1024)).astype(np.float32)
+            
         assert len(self.molecules) == len(self.img_treated)
         # assert len(self.img_treated) == len(self.img_control)
         
@@ -142,7 +130,7 @@ class MoleculeImageDataset(Dataset):
             self.img_treated = list(set(self.img_treated))
             self.img_control = list(set(self.img_control))
             self.total_images = self.img_treated + self.img_control
-            self.total_images_label = [1] * len(self.img_treated) + [-1] * len(self.img_control)
+            self.total_images_label = [0] * len(self.img_treated) + [1] * len(self.img_control) # Used only for generating embedding during inference
             
         # If the mean and std of the image set is already calculated, load them.
         if os.path.exists(root + "/mean.pkl"):
@@ -170,24 +158,26 @@ class MoleculeImageDataset(Dataset):
                     A.Resize(224, 224, always_apply=True),
                     # A.HorizontalFlip(),
                     # A.VerticalFlip(),
-                    A.Normalize(mean=self.img_mean, std=self.img_std, always_apply=True),
+                    A.Normalize(mean=self.img_mean, std=self.img_std, max_pixel_value=1.0, always_apply=True),
                 ]
             )
-        # Unimol representation.
-        if self.from_pretrained:
-            if not os.path.exists(root + "/unimol_repr.pkl"):    
-                self.unique_smiles_from_pretrained = dict(zip(self.unique_smiles, \
-                                                            from_pretrained.get_repr(self.unique_smiles)['cls_repr']))
-                with open(root + "/unimol_repr.pkl", "wb") as f:
-                    pkl.dump(self.unique_smiles_from_pretrained, f)
-            else:
-                with open(root + "/unimol_repr.pkl", "rb") as f:
-                    self.unique_smiles_from_pretrained = pkl.load(f)
-                for m in self.unique_smiles:
-                    if m not in self.unique_smiles_from_pretrained:
-                        self.unique_smiles_from_pretrained[m] = from_pretrained.get_repr(m)['cls_repr'][0]
-              
-        
+
+    def prepare_sequential_batch(batch: dict, device) -> dict:
+        """
+        Collate function used for sequential sampling.
+        """
+        batch = {
+            'i_control' : torch.vstack(batch['i_control']).to(device),
+            'i_treated' : torch.vstack(batch['i_treated']).to(device),
+            'm_treated' : [x[0] for x in batch['m_treated']]
+        }
+        return batch
+
+    def get_treated_classes(self):
+        """
+        Get the number of total treated_classes
+        """
+        return len(self.mol2label)
 
     def shuffle(self, seed: int = None):
         """
@@ -211,9 +201,10 @@ class MoleculeImageDataset(Dataset):
         """
         mean = 0.
         std = 0.
-        for f_path in img_treated + img_control:
-            # Only calculate the mean and std of the control images.
+        for f_path in tqdm(img_treated + img_control):
             image = load_hdf5(f_path)
+            import pdb
+            pdb.set_trace()
             image = cv2.resize(image, (224, 224))
             mean += np.mean(image.astype(float), axis=(0,1))
             std += np.std(image.astype(float), axis=(0,1))
@@ -246,6 +237,34 @@ class MoleculeImageDataset(Dataset):
 
         return plate_to_treated, plate_to_control, batch_to_treated, batch_to_control, source_to_treated, source_to_control
 
+    def sample_control_with_meta(self, source, batch, plate):
+        if plate in self.plate_to_control:
+            control_img_name = random.sample(self.plate_to_control[plate], 1)[0]
+        elif batch in self.batch_to_control:
+            control_img_name = random.sample(self.batch_to_control[batch], 1)[0]
+        elif source in self.source_to_control:
+            control_img_name = random.sample(self.source_to_control[source], 1)[0]
+        else:
+            control_img_name = random.sample(self.img_control, 1)[0]
+
+        return control_img_name
+    
+    def sample_treated_with_meta(self, source, batch, plate):
+        if plate in self.plate_to_treated:
+            treated_img_name = random.sample(self.plate_to_treated[plate], 1)[0]
+            smi = self.img2mol[treated_img_name]
+        elif batch in self.batch_to_treated:
+            treated_img_name = random.sample(self.batch_to_treated[batch], 1)[0]
+            smi = self.img2mol[treated_img_name]
+        elif source in self.source_to_treated:
+            treated_img_name = random.sample(self.source_to_treated[source], 1)[0]
+            smi = self.img2mol[treated_img_name]
+        else:
+            treated_img_name = random.sample(self.img_treated, 1)[0]
+            smi = self.img2mol[treated_img_name]
+
+        return treated_img_name, smi
+
     def __len__(self) -> int:
         """
         Returns the length of the dataset (i.e. the number of molecules/treated images).
@@ -275,45 +294,24 @@ class MoleculeImageDataset(Dataset):
             treated_img_1_name, treated_img_2_name = random.sample(self.mol2img[smi], 2)
             source_1, batch_1, plate_1 = treated_img_1_name.split('/')[-1].split('$')[:3]
             source_2, batch_2, plate_2 = treated_img_2_name.split('/')[-1].split('$')[:3]
-            treated_img_1_name = load_hdf5(treated_img_1_name)
-            treated_img_2_name = load_hdf5(treated_img_2_name)
+            treated_img_1 = load_hdf5(treated_img_1_name)
+            treated_img_2 = load_hdf5(treated_img_2_name)
             labels = self.mol2label[smi]
             
-            # if plate_1 in self.plate_to_control:
-            #     control_img_1_name = random.sample(self.plate_to_control[plate_1], 1)[0]
-            # elif batch_1 in self.batch_to_control:
-            #     control_img_1_name = random.sample(self.batch_to_control[batch_1], 1)[0]
-            # elif source_1 in self.source_to_control:
-            #     control_img_1_name = random.sample(self.source_to_control[source_1], 1)[0]
-            # else:
-            #     control_img_1_name = random.sample(self.img_control, 1)[0]
-                
-            # if plate_2 in self.plate_to_control:
-            #     control_img_2_name = random.sample(self.plate_to_control[plate_2], 1)[0]
-            # elif batch_2 in self.batch_to_control:
-            #     control_img_2_name = random.sample(self.batch_to_control[batch_2], 1)[0]
-            # elif source_2 in self.source_to_control:
-            #     control_img_2_name = random.sample(self.source_to_control[source_2], 1)[0]
-            # else:
-            #     control_img_2_name = random.sample(self.img_control, 1)[0]
-            control_img_1_name, control_img_2_name = random.sample(self.img_control, 2)
-            control_img_1_name = load_hdf5(control_img_1_name)
-            control_img_2_name = load_hdf5(control_img_2_name)
-            
-            # control_img_1_name = random.sample(self.img_control, 1)[0]
-            treated_img_1 = self.transforms(image=treated_img_1_name)['image']
-            if self.mode == 'train':
-                treated_img_2 = self.transforms(image=treated_img_2_name)['image']
-            else:
-                treated_img_2 = self.transforms(image=treated_img_2_name)['image']
-                
-            control_img_1 = self.transforms(image=control_img_1_name)['image']
-            if self.mode == 'train':
-                control_img_2 = self.transforms(image=control_img_2_name)['image']
-            else:
-                control_img_2 = self.transforms(image=control_img_2_name)['image']
+            # Sample with batch
+            control_img_1_name = self.sample_control_with_meta(source_1, batch_1, plate_1)
+            control_img_2_name = self.sample_control_with_meta( source_2, batch_2, plate_2)
+
+            control_img_1 = load_hdf5(control_img_1_name)
+            control_img_2 = load_hdf5(control_img_2_name)
+
+            treated_img_1 = self.transforms(image=treated_img_1)['image']
+            treated_img_2 = self.transforms(image=treated_img_2)['image']
+            control_img_1 = self.transforms(image=control_img_1)['image']
+            control_img_2 = self.transforms(image=control_img_2)['image']
+
             if self.from_pretrained:
-                smi = torch.tensor(self.unique_smiles_from_pretrained[smi])
+                smi = torch.tensor(self.unique_smiles_dict[smi])
             batch = {
                 'i_control_1' : torch.tensor(control_img_1).permute(2, 0, 1).float(),
                 'i_control_2' : torch.tensor(control_img_2).permute(2, 0, 1).float(),
@@ -339,45 +337,22 @@ class MoleculeImageDataset(Dataset):
                 'i_treated' : [torch.tensor(self.transforms(image=load_hdf5(x[0]))['image']).permute(2, 0, 1).float() for x in self.sequential_data[idx]],
                 'm_treated' : sorted(list(self.mol2img.keys()))
             }
+
         elif self.sample_strategy == 'img_only':
             img_name = self.total_images[idx]
             label = self.total_images_label[idx]
             source, batch, plate = img_name.split('/')[-1].split('$')[:3]
-            if label == 1:
-                if plate in self.plate_to_control:
-                    img_for_generation_name = random.sample(self.plate_to_control[plate], 1)[0]
-                    smi = self.img2mol[img_name]
-                elif batch in self.batch_to_control:
-                    img_for_generation_name = random.sample(self.batch_to_control[batch], 1)[0]
-                    smi = self.img2mol[img_name]
-                elif source in self.source_to_control:
-                    img_for_generation_name = random.sample(self.source_to_control[source], 1)[0]
-                    smi = self.img2mol[img_name]
-                else:
-                    try:
-                        img_for_generation_name = random.sample(self.img_control, 1)[0]
-                        smi = self.img2mol[img_name]
-                    except:
-                        img_for_generation_name = random.sample(self.img_treated, 1)[0]
-                        smi = self.img2mol[img_name]
+            if label == 0:
+                # original image is control, we sample a treated image for generation (Deprecated)
+                img_for_generation_name, smi = self.sample_treated_with_meta(source, batch, plate)
             else:
-                if plate in self.plate_to_treated:
-                    img_for_generation_name = random.sample(self.plate_to_treated[plate], 1)[0]
-                    smi = self.img2mol[img_for_generation_name]
-                elif batch in self.batch_to_treated:
-                    img_for_generation_name = random.sample(self.batch_to_treated[batch], 1)[0]
-                    smi = self.img2mol[img_for_generation_name]
-                elif source in self.source_to_treated:
-                    img_for_generation_name = random.sample(self.source_to_treated[source], 1)[0]
-                    smi = self.img2mol[img_for_generation_name]
-                else:
-                    img_for_generation_name = random.sample(self.img_treated, 1)[0]
-                    smi = self.img2mol[img_for_generation_name]
+                # original image is treated, we sample an control image for generation
+                img_for_generation_name = self.sample_control_with_meta(source, batch, plate)
                     
             img_for_generation  = self.transforms(image=load_hdf5(img_for_generation_name))['image']
             img = self.transforms(image=load_hdf5(img_name))['image']
             if self.from_pretrained:
-                smi = torch.tensor(self.unique_smiles_from_pretrained[smi])
+                smi = torch.tensor(self.unique_smiles_dict[smi])
             batch = {
                 'label' : torch.tensor([label]),
                 'img' : torch.tensor(img).permute(2, 0, 1).float(),
@@ -396,15 +371,3 @@ class MoleculeImageDataset(Dataset):
                 'm_treated': smi
             }
         return batch
-
-
-def prepare_sequential_batch(batch: dict, device) -> dict:
-    """
-    Collate function used for sequential sampling.
-    """
-    batch = {
-        'i_control' : torch.vstack(batch['i_control']).to(device),
-        'i_treated' : torch.vstack(batch['i_treated']).to(device),
-        'm_treated' : [x[0] for x in batch['m_treated']]
-    }
-    return batch

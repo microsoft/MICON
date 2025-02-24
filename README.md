@@ -1,33 +1,49 @@
-# Project
+## Code Repository for MICON
+This is the repository for paper ["Causal integration of chemical structures in self-supervised learning improves representations of microscopy images for morphological profiling"](Link). 
 
-> This repo has been populated by an initial template to help get you started. Please
-> make sure to update the content to build a great experience for community-building.
+#### Requirements
+- PIP environment requirements can be found in `./requirements.txt` for installation.
 
-As the maintainer of this project, please make a few updates:
+#### Dataset Creation
 
-- Improving this README.MD file to provide a great experience
-- Updating SUPPORT.MD with content about this project's support experience
-- Understanding the security reporting process in SECURITY.MD
-- Remove this section from the README
+- Please use the official JUMP Cell Painting dataset [download link](https://github.com/gwatkinson/jump_download/blob/main/jump_download/metadata/download_jump_metadata.py) to obtain the metadata for dataset creation and save under folder `./data/dataset/metadata/`
 
-## Contributing
+- Follow the notebook `./data/Dataset_Creation.ipynb` to create two ID and OOD dataset splits for pos-control and target-2 dataset. 
+  - For generating OOD knn splits, use flag `knn=True` for `sample_train_test_OOD_posctl()` and `sample_train_test_OOD_tgt2()`.
 
-This project welcomes contributions and suggestions.  Most contributions require you to agree to a
-Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
-the rights to use your contribution. For details, visit https://cla.opensource.microsoft.com.
 
-When you submit a pull request, a CLA bot will automatically determine whether you need to provide
-a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions
-provided by the bot. You will only need to do this once across all repos using our CLA.
+#### Model Training/Generate
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
-contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+- Modify the  configs `/config/default.yaml` and `/config/setup/encoders.yaml` to adjust different model archetecture and training/inference strategy.
 
-## Trademarks
+- Run `python main.py` with config `mode=train` for training and `mode=generate_embedding` for generating embeddings.
 
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft 
-trademarks or logos is subject to and must follow 
-[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
-Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
-Any use of third-party trademarks or logos are subject to those third-party's policies.
+- We also provided checkpoints for pre-trained models which are available in [Zenodo]()
+
+#### KNN-retrieval Experiments
+
+- You can download the curated embeddings for Cell-Profiler and other methods from [Zenodo]() and save it under folder `./embeddings/`.
+
+- Use the notebook `./analiyze_tools/analyze.ipynb` to calculate knn accuracies for different methods.
+    - An example for analyzing Cell-Profiler/ micon embedding accuracies:
+    ```
+    cp_fname = "embeddings/pos_control.centered.parquet"
+    model_fname = "embeddings/micon_embeddings.pkl"
+
+    pos_control = read_file_embeddings(cp_fname, model_fname, f_dim=1000, feature_cols="micon_") 
+    cp_cols = [c for c in pos_control.columns if not c.startswith("Metadata_") and not c.startswith("micon_") and not c.endswith("_path")]
+    micon_cols = [c for c in pos_control.columns if c.startswith("micon_")]
+
+    # Averaging fov features for single well statistics
+    pos_control = average_wells(pos_control, feature_cols="micon_") 
+
+    # You could change plate_col = (Metadata_Batch/Metadata_Plate/Metadata_Source) to adjust the scope of Control image for standardization
+    # pos_control_processed = plate_wise_spherize_and_normailize(pos_control, plate_col="Metadata_Batch", feature_cols=cp_cols, control_only=True) 
+
+    # Use NS_metric_across to calculate NSB(`on="Metadata_Batch"`)/NSS(`on="Metadata_Source"`) for topk retrieval statistics
+    NS_metric_across(RETRIEVAL_SET, QUERY_SET, feature_col=cp_cols, on="Metadata_Batch", topk=10, all_negative=False, return_smiles=False)
+    ```
+
+### Citation
+
+- WIP for link.

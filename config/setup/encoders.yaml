@@ -3,11 +3,12 @@
 # Encoder args
 img_encoder:
   from_pretrained: true
-  finetune: false
-  model_type: 'vit' # ['resnet', 'vit']
+  finetune: true
+  # model_type: 'vit' # ['resnet', 'vit']
+  model_type: 'resnet' # ['resnet', 'vit']
   model:
-    # _target_: torchvision.models.resnet34
-    _target_: torchvision.models.vit_b_16
+    _target_: torchvision.models.resnet101
+    # _target_: torchvision.models.vit_b_16
     weights: 'DEFAULT'
   output_size : 1000 # Final output size of the encoder
   

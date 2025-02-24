@@ -22,9 +22,9 @@ class ProjectionHead(nn.Module):
         self.fc = nn.Linear((input_size + projection_dim) // 2, projection_dim)
     
     def forward(self, x):
-        x = self.dropout(x)
-        projected = self.projection(x)
+        x = self.projection(x)
         x = self.relu(x)
+        x = self.dropout(x)
         x = self.fc(x)
 
         return x
@@ -51,12 +51,11 @@ class AuxClassificationHead(nn.Module):
 
     
 class MICON(nn.Module):
-    def __init__(self, args, img_enc, mol_enc=None, num_classes=None):
+    def __init__(self, args, img_enc, num_classes=None):
         super(MICON, self).__init__()
         self.img_enc = img_enc
-        self.mol_enc = mol_enc
         self.args = args
-        self.pre_mol_projector = ProjectionHead(args.micon.mol_size, args.micon.hidden_size, args.micon.dropout)
+        self.pre_mol_projector = ProjectionHead(args.mol_encoder.mol_size, args.micon.hidden_size, args.micon.dropout)
         self.original_img_projector = ProjectionHead(args.micon.hidden_size, args.micon.projection_dim, args.micon.dropout)
         if self.args.micon.aux:
             self.aux_classifier = AuxClassificationHead(args.micon.hidden_size, num_classes)
@@ -72,13 +71,6 @@ class MICON(nn.Module):
         self.gen_lambda = 1.0
         self.num_classes = num_classes
 
-        
-    def mol_encoding(self, m_treated):
-        if self.args.mol_encoder.model == "MLP":
-            return self.mol_enc(m_treated)
-        elif self.args.mol_encoder.model == "Unimol":
-            return m_treated
-    
     def repeat_channels(self, img):
         '''
             Whether to repeat the channels of 5-channel images to 5 3-channel images to fit the input of Img Encoder.
@@ -100,7 +92,7 @@ class MICON(nn.Module):
         i_control_1 = self.repeat_channels(i_control_1)
         i_control_2 = self.repeat_channels(i_control_2)
 
-        m_treated = self.pre_mol_projector(self.mol_encoding(m_treated))
+        m_treated = self.pre_mol_projector(m_treated)
 
         loss_dict = {}
 

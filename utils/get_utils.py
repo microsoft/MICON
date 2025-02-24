@@ -14,7 +14,7 @@ def get_img_encoder(args):
         img_encoder = instantiate(args.img_encoder.model)
         if not args.img_encoder.finetune:
             for param in img_encoder.parameters():
-                param.requires_grad = False
+                param.requires_grad = True
         else:
             for param in img_encoder.parameters():
                 param.requires_grad = False
@@ -38,7 +38,7 @@ def get_mol_encoder(args):
     if args.mol_encoder.model == "Unimol":
         mol_encoder = UniMolRepr(data_type='molecule')
     elif args.mol_encoder.model == "MLP":
-        mol_encoder = MLP(input_dim=1024, hidden_dim=1024, output_dim=512, n_layers=4)
+        mol_encoder = None
     elif args.mol_encoder.model == "MPN":
         raise NotImplementedError
     return mol_encoder

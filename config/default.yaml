@@ -2,7 +2,7 @@ defaults:
   - _self_
   - setup: encoders
 
-mode: 'train'
+mode: 'generate_embedding'
 
 # Experiemnt args
 device: 'cuda'
@@ -50,10 +50,10 @@ load:
 
 # Contrastive args
 micon:
-  loss: 'supervised' # Whether to add self-supervised contrastive learning loss
+  loss: 'supervised' # clip, supervised, self-supervised
   interleave_image: true # Interleave image channels to fit pre-trained resnet
   generation_head: true # Whether to add generation head to the model
-  generation_double_align: true # Whether to use
+  generation_double_align: true 
   hidden_size: 1000 # Dimensionality of output of encoders
   projection_dim: 512 # Dimensionality of hidden layers in projectors.
   dropout: 0.1

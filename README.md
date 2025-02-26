@@ -12,22 +12,21 @@ This is the repository for paper ["Causal integration of chemical structures in 
   - For generating OOD knn splits, use flag `knn=True` for `sample_train_test_OOD_posctl()` and `sample_train_test_OOD_tgt2()`.
 
 
-#### Model Training/Generate
+#### Model Training/Inference
 
 - Modify the  configs `/config/default.yaml` and `/config/setup/encoders.yaml` to adjust different model archetecture and training/inference strategy.
 
 - Run `python main.py` with config `mode=train` for training and `mode=generate_embedding` for generating embeddings.
 
-- We also provided checkpoints for pre-trained models which are available in [Zenodo]()
+- We also provided checkpoints for pre-trained models which are available in [link](https://www.dropbox.com/scl/fo/93yi5kr2878xznihjcf9w/APySE0JdKPbcM25e2UGF3cw?rlkey=casz2x8z3dwxgg99yom8ip1jb&st=mqtyc7mm&dl=0)
 
 #### KNN-retrieval Experiments
-
-- You can download the curated embeddings for Cell-Profiler and other methods from [Zenodo]() and save it under folder `./embeddings/`.
+- After generating embeddings pickle file with `mode=generate_embedding`, you can combine the result with cell-profiler embeddings parquet to calculate Not-Same(NS) metrics.
 
 - Use the notebook `./analiyze_tools/analyze.ipynb` to calculate knn accuracies for different methods.
     - An example for analyzing Cell-Profiler/ micon embedding accuracies:
     ```
-    cp_fname = "embeddings/pos_control.centered.parquet"
+    cp_fname = "embeddings/target2.centered.parquet"
     model_fname = "embeddings/micon_embeddings.pkl"
 
     pos_control = read_file_embeddings(cp_fname, model_fname, f_dim=1000, feature_cols="micon_") 
@@ -39,11 +38,16 @@ This is the repository for paper ["Causal integration of chemical structures in 
 
     # You could change plate_col = (Metadata_Batch/Metadata_Plate/Metadata_Source) to adjust the scope of Control image for standardization
     # pos_control_processed = plate_wise_spherize_and_normailize(pos_control, plate_col="Metadata_Batch", feature_cols=cp_cols, control_only=True) 
+    ```
+    
+- You could also download the processed and averaged embeddings from [link](https://www.dropbox.com/scl/fo/93yi5kr2878xznihjcf9w/APySE0JdKPbcM25e2UGF3cw?rlkey=casz2x8z3dwxgg99yom8ip1jb&st=mqtyc7mm&dl=0)
 
-    # Use NS_metric_across to calculate NSB(`on="Metadata_Batch"`)/NSS(`on="Metadata_Source"`) for topk retrieval statistics
+- Use ```NS_metric_across`` to calculate metrics NSB(`on="Metadata_Batch"`)/NSS(`on="Metadata_Source"`) for topk retrieval statistics between query set and retrieval set. AA
+  ```
+   # calculate metrics NSB(`on="Metadata_Batch"`)/NSS(`on="Metadata_Source"`) for topk retrieval statistics
     NS_metric_across(RETRIEVAL_SET, QUERY_SET, feature_col=cp_cols, on="Metadata_Batch", topk=10, all_negative=False, return_smiles=False)
     ```
 
 ### Citation
 
-- WIP for link.
+- WIP for citation bib.

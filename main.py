@@ -4,6 +4,7 @@ import hydra
 import pdb
 import pickle as pkl
 import numpy as np
+import time
 
 from tqdm import tqdm
 from omegaconf import OmegaConf
@@ -12,9 +13,8 @@ from torch.utils.tensorboard import SummaryWriter
 from sklearn.preprocessing import normalize
 
 from model.micon import MICON
-from utils import Averager, Logger, get_lr, get_img_encoder
+from utils import Averager, Logger, get_lr, get_img_encoder, get_mol_encoder
 from data.dataset import MoleculeImageDataset
-from unimol_tools import UniMolRepr
 
 
 
@@ -23,7 +23,7 @@ def build_loaders(dataset, batch_size, collate_fn=None, mode='train', drop_last=
         dataset,
         batch_size=batch_size,
         collate_fn=collate_fn,
-        num_workers=20,
+        num_workers=4,
         shuffle=True if mode == "train" else False,
         drop_last=drop_last
     )
@@ -45,6 +45,7 @@ def train(args, model, train_loader, valid_dataloader, optimizer, lr_scheduler, 
         for _batch in train_loader:
             current_step += 1
             batch = {}
+
             for k, v in _batch.items():
                 batch[k] = v.to(args.device) if torch.is_tensor(v) else v
             batch_dict = model.training_step(batch)
@@ -112,6 +113,7 @@ def eval(args, model, valid_dataloader, writer, logger, current_step):
     return
 
 def generate_embeddings(args, model, generate_dataloader):
+    model.eval()
     total_valid_steps = len(generate_dataloader)
     img_emb, img_generated_emb, f_name = [], [], []
     pbar = tqdm(total = total_valid_steps)
@@ -119,7 +121,7 @@ def generate_embeddings(args, model, generate_dataloader):
         batch = {}
         for k, v in _batch.items():
             batch[k] = v.to(args.device) if torch.is_tensor(v) else v
-        _img_emb, _img_generated_emb, _f_name = model.generate_image_embeddings(**batch)
+        _img_emb, _img_generated_emb, _f_name = model.generate_image_embeddings(**batch, method=args.generate_embedding.method)
         img_generated_emb.append(_img_generated_emb.detach().cpu().numpy())
         img_emb.append(_img_emb.detach().cpu().numpy())
         f_name.extend(_f_name)
@@ -171,69 +173,63 @@ def load_state(model, optimizer, args):
 
 @hydra.main(config_path="config", config_name="default", version_base='1.1')
 def main(args):
+    os.environ['MASTER_ADDR'] = 'localhost'  
+    os.environ['MASTER_PORT'] = '12355'
+
     writer = SummaryWriter()
     logger = Logger()
-    img_enc = get_img_encoder(args)
-    # mol_enc = get_mol_encoder(args)
-    pretrained_mol_enc = UniMolRepr(data_type='molecule')
-    
     OmegaConf.save(config=args, f=".hydra/config.yaml")
-    
-    model = MICON(args, img_enc, mol_enc=None).to(args.device)
+
+    # Pretrained model
+    print(args)
+    img_enc = get_img_encoder(args)
+    mol_enc = get_mol_encoder(args)
+    # pretrained_mol_enc = UniMolRepr(data_type='molecule')
+
+    # Dataset 
+    train_set = MoleculeImageDataset(args.data.train_path, args=args, sample_strategy=args.data.train_sample_strategy, \
+                                    from_pretrained=mol_enc, mode='train')
+    valid_set = MoleculeImageDataset(args.data.valid_path, args=args, sample_strategy=args.data.valid_sample_strategy, \
+                                    from_pretrained=mol_enc, mode='test')
+
+    train_dataloader = build_loaders(train_set, batch_size=args.train.batch_size, mode="train")
+    valid_dataloader = build_loaders(valid_set, batch_size=args.valid.batch_size, mode="valid")
+
+    # Define Model
+
+    model = MICON(args, img_enc, num_classes=train_set.get_treated_classes()).to(args.device)
+    # print(f"total class:{train_set.get_treated_classes()}")
+
     optimizer = torch.optim.AdamW(
     model.parameters(), lr=args.train.optim.lr, weight_decay=args.train.optim.weight_decay
     )
-    # optimizer = torch.optim.SGD(model.parameters(), lr=args.train.optim.lr, momentum=0.9, weight_decay=args.train.optim.weight_decay)
-    # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    #     optimizer, mode="min", patience=500, factor=0.9
-    # )
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", patience=500, factor=0.9, min_lr=1e-6,
     )
     
     if args.mode == "train":
         # model, optimizer = load_state(model, optimizer, args)
-        train_set = MoleculeImageDataset(args.data.train_path, args=args, sample_strategy=args.data.train_sample_strategy, \
-                                        from_pretrained=pretrained_mol_enc, mode='train')
-        valid_set = MoleculeImageDataset(args.data.valid_path, args=args, sample_strategy=args.data.valid_sample_strategy, \
-                                        from_pretrained=pretrained_mol_enc, mode='test')
-
-        train_dataloader = build_loaders(train_set, batch_size=args.train.batch_size, mode="train")
-        valid_dataloader = build_loaders(valid_set, batch_size=args.valid.batch_size, mode="valid")
         train(args, model, train_dataloader, valid_dataloader, optimizer, lr_scheduler, writer=writer, logger=logger)
         
     if args.mode == "generate_embedding":
-        generate_set_train = MoleculeImageDataset(args.data.generate_path, args=args, sample_strategy='img_only', \
-                            from_pretrained=pretrained_mol_enc, mode='test', metadata="metadata_train.csv")
-        generate_set_test = MoleculeImageDataset(args.data.generate_path, args=args, sample_strategy='img_only', \
-                            from_pretrained=pretrained_mol_enc, mode='test', metadata="metadata_test.csv")
-        # generate_set_test_ood = MoleculeImageDataset(args.data.generate_path, args=args, sample_strategy='img_only', \
-        #                     from_pretrained=pretrained_mol_enc, mode='test', metadata="metadata_test_unseen.csv")
-        generate_train_dataloader = build_loaders(generate_set_train, batch_size=64, mode="valid")
-        generate_test_dataloader = build_loaders(generate_set_test, batch_size=64, mode="valid")
-        # generate_test_ood_dataloader = build_loaders(generate_set_test_ood, batch_size=64, mode="valid")
+        generate_set = MoleculeImageDataset(args.data.generate_path, args=args, sample_strategy='img_only', \
+                            from_pretrained=mol_enc, mode='test', metadata="metadata_test.csv")
+        generate_dataloader = build_loaders(generate_set, batch_size=args.generate_embedding.batch_size, mode="valid")
         model, _ = load_state(model, optimizer, args)
         model.eval()
-        img_emb, img_generated_emb, f_name = generate_embeddings(args, model, generate_train_dataloader)
-        with open(args.data.generate_path + f"_new_embeddings_supcon_freeze_img_train_{args.ckpt}.pkl", 'wb') as f:
+        img_emb, img_generated_emb, f_name = generate_embeddings(args, model, generate_dataloader)
+        with open(args.generate_embedding.save_path + f"{args.exp_setting}_{args.ckpt}_{args.generate_embedding.method}_original.pkl", 'wb') as f:
             logger.log_message("Saving embeddings... Size: {}".format(img_emb.shape))
             pkl.dump((img_emb, f_name), f)
-        with open(args.data.generate_path + f"_new_embeddings_supcon_freeze_img_train_{args.ckpt}_generated.pkl", 'wb') as f:
-            logger.log_message("Saving generated embeddings... Size: {}".format(img_generated_emb.shape))
-            pkl.dump((img_generated_emb, f_name), f)
-            
-        img_emb, img_generated_emb, f_name = generate_embeddings(args, model, generate_test_dataloader)
-        with open(args.data.generate_path + f"_new_embeddings_supcon_freeze_img_test_{args.ckpt}.pkl", 'wb') as f:
-            logger.log_message("Saving embeddings... Size: {}".format(img_emb.shape))
-            pkl.dump((img_emb, f_name), f)
-        with open(args.data.generate_path + f"_new_embeddings_supcon_freeze_img_test_{args.ckpt}_generated.pkl", 'wb') as f:
-            logger.log_message("Saving generated embeddings... Size: {}".format(img_generated_emb.shape))
-            pkl.dump((img_generated_emb, f_name), f)
+        if args.generate_embedding.generate:
+            with open(args.generate_embedding.save_path + f"{args.exp_setting}_{args.ckpt}_{args.generate_embedding.method}_generated.pkl", 'wb') as f:
+                logger.log_message("Saving generated embeddings... Size: {}".format(img_generated_emb.shape))
+                pkl.dump((img_generated_emb, f_name), f)
             
             
     if args.mode == "test":
         test_set = MoleculeImageDataset(args.data.valid_path, args=args, sample_strategy='retreival', \
-                                        from_pretrained=pretrained_mol_enc)
+                                        from_pretrained=mol_enc)
         test_dataloader = build_loaders(test_set, batch_size=64, mode="train", drop_last=False)
         model, _ = load_state(model, optimizer, args)
         model.eval()
@@ -247,7 +243,7 @@ def main(args):
                 correct_smi = smi[f"o_top{k}_mol"]
                 for s in correct_smi:
                     smi_stats[k][s] += 1
-        with open(args.data.valid_path + "/test_retrieval_score_unfreeze_200steps.pkl", "wb") as f:
+        with open(args.data.valid_path + "/test_retrieve.pkl", "wb") as f:
             pkl.dump(smi_stats, f)
         
         

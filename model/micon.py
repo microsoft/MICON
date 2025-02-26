@@ -17,9 +17,9 @@ class ProjectionHead(nn.Module):
     ):
         super().__init__()
         self.dropout = nn.Dropout(dropout)
-        self.projection = nn.Linear(input_size, (input_size + projection_dim) // 2)
+        self.projection = nn.Linear(input_size, input_size)
         self.relu = nn.ReLU()
-        self.fc = nn.Linear((input_size + projection_dim) // 2, projection_dim)
+        self.fc = nn.Linear(input_size, projection_dim)
     
     def forward(self, x):
         x = self.projection(x)

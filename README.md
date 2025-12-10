@@ -6,7 +6,7 @@ This is the repository for paper ["Causal integration of chemical structures in 
 
 #### Dataset Creation
 
-- Please use the official JUMP Cell Painting dataset [download link](https://github.com/gwatkinson/jump_download/blob/main/jump_download/metadata/download_jump_metadata.py) to obtain the metadata for dataset creation and save under folder `./data/dataset/metadata/`
+- We recommend downloading the [JUMP Cell Painting dataset](https://jump-cellpainting.broadinstitute.org/) using [scripts](https://github.com/gwatkinson/jump_download/blob/main/jump_download/metadata/download_jump_metadata.py) provided by [Watkinson et al.](https://ieeexplore.ieee.org/document/10635200). This will obtain the metadata for dataset creation, which should be saved under folder `./data/dataset/metadata/`
 
 - Follow the notebook `./data/Dataset_Creation.ipynb` to create two ID and OOD dataset splits for pos-control and target-2 dataset. 
   - For generating OOD knn splits, use flag `knn=True` for `sample_train_test_OOD_posctl()` and `sample_train_test_OOD_tgt2()`.

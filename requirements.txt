@@ -14,7 +14,7 @@ opencv_python==4.8.1.78
 opencv_python_headless==4.8.1.78
 pandas==2.2.3
 Pillow==10.0.1
-Pillow==10.4.0
+Pillow==12.1.1
 pycytominer==1.1.0
 pymatgen==2023.11.12
 PyYAML==6.0.1
